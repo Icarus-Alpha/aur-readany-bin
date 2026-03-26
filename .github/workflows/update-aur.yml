@@ -25,6 +25,21 @@ jobs:
           echo "current=$CURRENT" >> $GITHUB_OUTPUT
           echo "changed=$([[ "$LATEST" != "$CURRENT" ]] && echo true || echo false)" >> $GITHUB_OUTPUT
 
+      - name: Check Tauri major version
+        run: |
+          TAURI_VER=$(curl -s https://raw.githubusercontent.com/codedogQBY/ReadAny/main/packages/app/src-tauri/Cargo.toml \
+            | grep '^tauri = ' | grep -oP '"[0-9]+' | tr -d '"')
+          PKGBUILD_TAURI=$(grep -oP 'webkit2gtk-\K[0-9.]+' PKGBUILD | head -1 | cut -d. -f1)
+          echo "Upstream Tauri major: $TAURI_VER, PKGBUILD webkit suffix implies Tauri: $PKGBUILD_TAURI"
+          if [[ "$TAURI_VER" == "3" && "$PKGBUILD_TAURI" == "4" ]]; then
+            gh issue create \
+              --title "⚠️ Tauri major version changed: manual dependency review needed" \
+              --body "Upstream Cargo.toml now references Tauri v3. The \`depends\` array in PKGBUILD may need updating. Please review against the new Tauri AUR documentation." \
+              --label "maintenance" || true
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   update:
     needs: check
     if: needs.check.outputs.changed == 'true'
