@@ -1,0 +1,79 @@
+name: Update AUR Package
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      latest: ${{ steps.version.outputs.latest }}
+      current: ${{ steps.version.outputs.current }}
+      changed: ${{ steps.version.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare versions
+        id: version
+        run: |
+          LATEST=$(curl -s https://api.github.com/repos/codedogQBY/ReadAny/releases/latest \
+            | jq -r '.tag_name' | sed 's/^v//')
+          CURRENT=$(grep '^pkgver=' PKGBUILD | cut -d= -f2)
+          echo "latest=$LATEST" >> $GITHUB_OUTPUT
+          echo "current=$CURRENT" >> $GITHUB_OUTPUT
+          echo "changed=$([[ "$LATEST" != "$CURRENT" ]] && echo true || echo false)" >> $GITHUB_OUTPUT
+
+  update:
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update PKGBUILD
+        run: |
+          NEW_VER="${{ needs.check.outputs.latest }}"
+          DEB_URL="https://github.com/codedogQBY/ReadAny/releases/download/v${NEW_VER}/ReadAny_${NEW_VER}_amd64.deb"
+          SHA256=$(curl -sL "$DEB_URL" | sha256sum | awk '{print $1}')
+
+          sed -i "s/^pkgver=.*/pkgver=${NEW_VER}/" PKGBUILD
+          sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+          sed -i "s/sha256sums_x86_64=('.*')/sha256sums_x86_64=('${SHA256}')/" PKGBUILD
+
+      - name: Generate .SRCINFO
+        run: |
+          docker run --rm -v "$PWD:/pkg" archlinux:latest \
+            bash -c "cd /pkg && makepkg --printsrcinfo > .SRCINFO"
+
+      - name: Push to AUR
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$AUR_SSH_KEY" > ~/.ssh/aur_key
+          chmod 600 ~/.ssh/aur_key
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
+          cat >> ~/.ssh/config <<EOF
+          Host aur.archlinux.org
+            IdentityFile ~/.ssh/aur_key
+            User aur
+          EOF
+
+          git clone ssh://aur@aur.archlinux.org/readany-bin.git /tmp/aur
+          cp PKGBUILD .SRCINFO /tmp/aur/
+          cd /tmp/aur
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add PKGBUILD .SRCINFO
+          git commit -m "Update to ${{ needs.check.outputs.latest }}"
+          git push
+
+      - name: Commit back to this repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add PKGBUILD .SRCINFO
+          git commit -m "chore: update to ${{ needs.check.outputs.latest }}"
+          git push
