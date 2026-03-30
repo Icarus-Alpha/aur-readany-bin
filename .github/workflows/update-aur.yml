@@ -127,6 +127,9 @@ jobs:
 
           export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
 
+          ssh -i ~/.ssh/aur_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -T aur@aur.archlinux.org || true
+          ssh -i ~/.ssh/aur_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes aur@aur.archlinux.org list-repos
+
           git clone ssh://aur@aur.archlinux.org/readany-bin.git /tmp/aur
           cp PKGBUILD .SRCINFO /tmp/aur/
           cd /tmp/aur
