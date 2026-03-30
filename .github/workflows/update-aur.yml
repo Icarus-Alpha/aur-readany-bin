@@ -144,8 +144,12 @@ jobs:
           TMP_PKGDIR=$(mktemp -d)
           trap 'rm -rf "$TMP_PKGDIR"' EXIT
           cp PKGBUILD "$TMP_PKGDIR/PKGBUILD"
-          docker run --rm -v "$TMP_PKGDIR:/pkg" archlinux:latest \
-            bash -c "useradd -m builder && chown -R builder:builder /pkg && su builder -c 'cd /pkg && makepkg --printsrcinfo > .SRCINFO'"
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
+            -v "$TMP_PKGDIR:/pkg" \
+            archlinux:latest \
+            bash -c "cd /pkg && makepkg --printsrcinfo > .SRCINFO"
           cp "$TMP_PKGDIR/.SRCINFO" .SRCINFO
 
       - name: Upload package metadata
