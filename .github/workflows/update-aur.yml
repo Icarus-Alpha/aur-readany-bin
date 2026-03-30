@@ -83,10 +83,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  update:
+  prepare:
     needs: check
     if: needs.check.outputs.changed == 'true'
-    runs-on: [self-hosted, Linux, X64, aur-updater]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -148,6 +148,26 @@ jobs:
             bash -c "useradd -m builder && chown -R builder:builder /pkg && su builder -c 'cd /pkg && makepkg --printsrcinfo > .SRCINFO'"
           cp "$TMP_PKGDIR/.SRCINFO" .SRCINFO
 
+      - name: Upload package metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: aur-package-files
+          path: |
+            PKGBUILD
+            .SRCINFO
+          if-no-files-found: error
+
+  push_aur:
+    needs: [check, prepare]
+    if: needs.check.outputs.changed == 'true'
+    runs-on: [self-hosted, Linux, X64, aur-updater]
+    steps:
+      - name: Download package metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: aur-package-files
+          path: aur-package-files
+
       - name: Push to AUR
         env:
           AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
@@ -166,7 +186,7 @@ jobs:
           export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
 
           git clone ssh://aur@aur.archlinux.org/readany-bin.git /tmp/aur
-          cp PKGBUILD .SRCINFO /tmp/aur/
+          cp aur-package-files/PKGBUILD aur-package-files/.SRCINFO /tmp/aur/
           cd /tmp/aur
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -178,12 +198,28 @@ jobs:
             git push
           fi
 
+  commit_back:
+    needs: [check, prepare, push_aur]
+    if: needs.check.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download package metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: aur-package-files
+          path: aur-package-files
+
       - name: Commit back to this repo
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
+          cp aur-package-files/PKGBUILD aur-package-files/.SRCINFO .
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
