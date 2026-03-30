@@ -113,7 +113,7 @@ jobs:
           for url in "${URLS[@]}"; do
             echo "Downloading asset from: $url"
             rm -f "$TMP_FILE"
-            if curl --retry 5 --retry-delay 3 --retry-all-errors --connect-timeout 15 --speed-time 30 --speed-limit 10240 -fL "$url" -o "$TMP_FILE"; then
+            if curl --retry 5 --retry-delay 3 --connect-timeout 15 --speed-time 30 --speed-limit 10240 -fL "$url" -o "$TMP_FILE"; then
               actual_size=$(stat -c%s "$TMP_FILE")
               if [[ "$actual_size" == "$EXPECTED_SIZE" ]]; then
                 mv "$TMP_FILE" "$DEB_FILE"
