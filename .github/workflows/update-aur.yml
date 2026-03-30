@@ -121,15 +121,11 @@ jobs:
           fi
 
           mkdir -p ~/.ssh
-          echo "$AUR_SSH_KEY" > ~/.ssh/aur_key
+          printf '%s\n' "$AUR_SSH_KEY" > ~/.ssh/aur_key
           chmod 600 ~/.ssh/aur_key
           ssh-keyscan -H aur.archlinux.org >> ~/.ssh/known_hosts
-          cat >> ~/.ssh/config <<EOF
-          Host aur.archlinux.org
-            IdentityFile ~/.ssh/aur_key
-            User aur
-            IdentitiesOnly yes
-          EOF
+
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
 
           git clone ssh://aur@aur.archlinux.org/readany-bin.git /tmp/aur
           cp PKGBUILD .SRCINFO /tmp/aur/
