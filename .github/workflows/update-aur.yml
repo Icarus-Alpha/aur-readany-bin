@@ -189,9 +189,11 @@ jobs:
 
           export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
 
-          git clone ssh://aur@aur.archlinux.org/readany-bin.git /tmp/aur
-          cp aur-package-files/PKGBUILD aur-package-files/.SRCINFO /tmp/aur/
-          cd /tmp/aur
+          AUR_WORKTREE=$(mktemp -d /tmp/aur.XXXXXX)
+          trap 'rm -rf "$AUR_WORKTREE"' EXIT
+          git clone ssh://aur@aur.archlinux.org/readany-bin.git "$AUR_WORKTREE"
+          cp aur-package-files/PKGBUILD aur-package-files/.SRCINFO "$AUR_WORKTREE"/
+          cd "$AUR_WORKTREE"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add PKGBUILD .SRCINFO
