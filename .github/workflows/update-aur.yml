@@ -175,14 +175,18 @@ jobs:
           fi
 
       - name: Commit back to this repo
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git add PKGBUILD .SRCINFO
           if git diff --cached --quiet; then
             echo "No repository changes to commit"
           else
             git commit -m "chore: update to ${{ needs.check.outputs.latest }}"
-            git push
+            git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
