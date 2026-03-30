@@ -17,6 +17,7 @@ jobs:
       current: ${{ steps.version.outputs.current }}
       changed: ${{ steps.version.outputs.changed }}
       asset_url: ${{ steps.version.outputs.asset_url }}
+      asset_size: ${{ steps.version.outputs.asset_size }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,12 +40,13 @@ jobs:
           TAG_NAME=$(jq -er '.tag_name' "$RELEASE_JSON")
           LATEST=${TAG_NAME#v}
           CURRENT=$(grep '^pkgver=' PKGBUILD | cut -d= -f2)
-          ASSET_URL=$(jq -er '
+          ASSET=$(jq -er '
             .assets
             | map(select(.name | test("(amd64|x86_64).*\\.deb$")))
             | first
-            | .browser_download_url
           ' "$RELEASE_JSON")
+          ASSET_URL=$(jq -er '.browser_download_url' <<<"$ASSET")
+          ASSET_SIZE=$(jq -er '.size' <<<"$ASSET")
 
           echo "Debug: LATEST=$LATEST, CURRENT=$CURRENT"
           if [[ -z "$LATEST" || "$LATEST" == "null" ]]; then
@@ -58,6 +60,7 @@ jobs:
           echo "latest=$LATEST" >> $GITHUB_OUTPUT
           echo "current=$CURRENT" >> $GITHUB_OUTPUT
           echo "asset_url=$ASSET_URL" >> $GITHUB_OUTPUT
+          echo "asset_size=$ASSET_SIZE" >> $GITHUB_OUTPUT
           if [[ "$LATEST" != "$CURRENT" ]]; then
             echo "changed=true" >> $GITHUB_OUTPUT
           else
@@ -90,13 +93,44 @@ jobs:
           persist-credentials: false
 
       - name: Update PKGBUILD
+        env:
+          GH_RELEASE_MIRROR_PREFIX: ${{ vars.GH_RELEASE_MIRROR_PREFIX }}
         run: |
           set -euo pipefail
           NEW_VER="${{ needs.check.outputs.latest }}"
           DEB_URL="${{ needs.check.outputs.asset_url }}"
+          EXPECTED_SIZE="${{ needs.check.outputs.asset_size }}"
           DEB_FILE=$(mktemp --suffix=.deb)
+          TMP_FILE="${DEB_FILE}.part"
 
-          curl -fsSL "$DEB_URL" -o "$DEB_FILE"
+          URLS=()
+          if [[ -n "${GH_RELEASE_MIRROR_PREFIX:-}" ]]; then
+            URLS+=("${GH_RELEASE_MIRROR_PREFIX%/}/${DEB_URL}")
+          fi
+          URLS+=("$DEB_URL")
+
+          download_ok=false
+          for url in "${URLS[@]}"; do
+            echo "Downloading asset from: $url"
+            rm -f "$TMP_FILE"
+            if curl --retry 5 --retry-delay 3 --retry-all-errors --connect-timeout 15 --speed-time 30 --speed-limit 10240 -fL "$url" -o "$TMP_FILE"; then
+              actual_size=$(stat -c%s "$TMP_FILE")
+              if [[ "$actual_size" == "$EXPECTED_SIZE" ]]; then
+                mv "$TMP_FILE" "$DEB_FILE"
+                download_ok=true
+                break
+              fi
+              echo "Downloaded size mismatch: expected $EXPECTED_SIZE, got $actual_size"
+            else
+              echo "Download failed: $url"
+            fi
+          done
+
+          if [[ "$download_ok" != "true" ]]; then
+            echo "ERROR: failed to download release asset from all candidates"
+            exit 1
+          fi
+
           SHA256=$(sha256sum "$DEB_FILE" | awk '{print $1}')
 
           sed -i "s/^pkgver=.*/pkgver=${NEW_VER}/" PKGBUILD
