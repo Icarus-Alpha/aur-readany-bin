@@ -5,6 +5,10 @@ on:
     - cron: '0 6 * * *'
   workflow_dispatch:
 
+permissions:
+  contents: write
+  issues: write
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -12,21 +16,55 @@ jobs:
       latest: ${{ steps.version.outputs.latest }}
       current: ${{ steps.version.outputs.current }}
       changed: ${{ steps.version.outputs.changed }}
+      asset_url: ${{ steps.version.outputs.asset_url }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Compare versions
         id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          LATEST=$(curl -s https://api.github.com/repos/codedogQBY/ReadAny/releases/latest \
-            | jq -r '.tag_name' | sed 's/^v//')
+          set -euo pipefail
+
+          RELEASE_JSON=$(mktemp)
+          curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            https://api.github.com/repos/codedogQBY/ReadAny/releases/latest \
+            -o "$RELEASE_JSON"
+
+          TAG_NAME=$(jq -er '.tag_name' "$RELEASE_JSON")
+          LATEST=${TAG_NAME#v}
           CURRENT=$(grep '^pkgver=' PKGBUILD | cut -d= -f2)
+          ASSET_URL=$(jq -er '
+            .assets
+            | map(select(.name | test("(amd64|x86_64).*\\.deb$")))
+            | first
+            | .browser_download_url
+          ' "$RELEASE_JSON")
+
+          echo "Debug: LATEST=$LATEST, CURRENT=$CURRENT"
+          if [[ -z "$LATEST" || "$LATEST" == "null" ]]; then
+            echo "ERROR: Failed to fetch latest version"
+            exit 1
+          fi
+          if [[ -z "$ASSET_URL" || "$ASSET_URL" == "null" ]]; then
+            echo "ERROR: Failed to locate amd64/x86_64 .deb asset in latest release"
+            exit 1
+          fi
           echo "latest=$LATEST" >> $GITHUB_OUTPUT
           echo "current=$CURRENT" >> $GITHUB_OUTPUT
-          echo "changed=$([[ "$LATEST" != "$CURRENT" ]] && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "asset_url=$ASSET_URL" >> $GITHUB_OUTPUT
+          if [[ "$LATEST" != "$CURRENT" ]]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Check Tauri major version
         run: |
+          set -euo pipefail
           TAURI_VER=$(curl -s https://raw.githubusercontent.com/codedogQBY/ReadAny/main/packages/app/src-tauri/Cargo.toml \
             | grep '^tauri = ' | grep -oP '"[0-9]+' | tr -d '"')
           PKGBUILD_TAURI=$(grep -oP 'webkit2gtk-\K[0-9.]+' PKGBUILD | head -1 | cut -d. -f1)
@@ -49,16 +87,22 @@ jobs:
 
       - name: Update PKGBUILD
         run: |
+          set -euo pipefail
           NEW_VER="${{ needs.check.outputs.latest }}"
-          DEB_URL="https://github.com/codedogQBY/ReadAny/releases/download/v${NEW_VER}/ReadAny_${NEW_VER}_amd64.deb"
-          SHA256=$(curl -sL "$DEB_URL" | sha256sum | awk '{print $1}')
+          DEB_URL="${{ needs.check.outputs.asset_url }}"
+          DEB_FILE=$(mktemp --suffix=.deb)
+
+          curl -fsSL "$DEB_URL" -o "$DEB_FILE"
+          SHA256=$(sha256sum "$DEB_FILE" | awk '{print $1}')
 
           sed -i "s/^pkgver=.*/pkgver=${NEW_VER}/" PKGBUILD
           sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+          sed -i "s|^source_x86_64=.*|source_x86_64=(\"\${pkgname}-\${pkgver}.deb::${DEB_URL}\")|" PKGBUILD
           sed -i "s/sha256sums_x86_64=('.*')/sha256sums_x86_64=('${SHA256}')/" PKGBUILD
 
       - name: Generate .SRCINFO
         run: |
+          set -euo pipefail
           docker run --rm -v "$PWD:/pkg" archlinux:latest \
             bash -c "useradd -m builder && chown -R builder:builder /pkg && su builder -c 'cd /pkg && makepkg --printsrcinfo > .SRCINFO'"
 
@@ -66,14 +110,21 @@ jobs:
         env:
           AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
         run: |
+          set -euo pipefail
+          if [[ -z "${AUR_SSH_KEY}" ]]; then
+            echo "ERROR: AUR_SSH_KEY is not configured"
+            exit 1
+          fi
+
           mkdir -p ~/.ssh
           echo "$AUR_SSH_KEY" > ~/.ssh/aur_key
           chmod 600 ~/.ssh/aur_key
-          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
+          ssh-keyscan -H aur.archlinux.org >> ~/.ssh/known_hosts
           cat >> ~/.ssh/config <<EOF
           Host aur.archlinux.org
             IdentityFile ~/.ssh/aur_key
             User aur
+            IdentitiesOnly yes
           EOF
 
           git clone ssh://aur@aur.archlinux.org/readany-bin.git /tmp/aur
@@ -82,13 +133,22 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add PKGBUILD .SRCINFO
-          git commit -m "Update to ${{ needs.check.outputs.latest }}"
-          git push
+          if git diff --cached --quiet; then
+            echo "No AUR changes to push"
+          else
+            git commit -m "Update to ${{ needs.check.outputs.latest }}"
+            git push
+          fi
 
       - name: Commit back to this repo
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add PKGBUILD .SRCINFO
-          git commit -m "chore: update to ${{ needs.check.outputs.latest }}"
-          git push
+          if git diff --cached --quiet; then
+            echo "No repository changes to commit"
+          else
+            git commit -m "chore: update to ${{ needs.check.outputs.latest }}"
+            git push
+          fi
