@@ -83,7 +83,7 @@ jobs:
   update:
     needs: check
     if: needs.check.outputs.changed == 'true'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, aur-updater]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -123,7 +123,6 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' "$AUR_SSH_KEY" > ~/.ssh/aur_key
           chmod 600 ~/.ssh/aur_key
-          ssh-keygen -y -f ~/.ssh/aur_key | ssh-keygen -lf -
           ssh-keyscan -H aur.archlinux.org >> ~/.ssh/known_hosts
 
           export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
